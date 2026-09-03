@@ -1,0 +1,84 @@
+# ===== 私钥与凭据 =====
+*.pem
+*.key
+*.p12
+*.pfx
+pem/
+**/secrets/
+**/*.secret
+
+# 环境变量 / 真实凭据
+.env
+.env.*
+!**/.env.example
+!**/env.example
+**/search-gateway.env
+
+# SSH / 凭据脚本（含内部 IP/账号）
+train-roma/con_to_llm.sh
+train-roma/con_to_llm_hd.sh
+train-roma/con_to_web.sh
+train-roma/run_distribute_train.sh
+
+# ===== 第三方/不可发布内容 =====
+# 模型权重
+Qwen3-4B-Instruct-2507/
+
+# 训练数据 / 数据集
+data/
+
+# 运行时产物
+outputs/
+rollout_data/
+logs/
+**/wandb/
+**/checkpoints/
+**/tensorboard/
+**/.trash/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+env/
+ENV/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ===== 系统 / 编辑器 =====
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+!.vscode/extensions.json
+.idea/
+
+# ===== 日志 / 临时 =====
+*.log
+*.tmp
+*.bak
+core
+core.*
+nohup.out

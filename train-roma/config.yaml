@@ -1,0 +1,136 @@
+# config.yaml
+## (ppo_mini_batch_size * n_roll_out) % (n_gpus * sp * bs_per_gpu) == 0 
+env:
+  TASK: ${env:TASK,qa}  ## "webshop" | "qa" | "rule"
+  # 先用纯 GRPO 建立稳定基线；SLIC 会对整个 replay buffer 再做一轮独立更新，
+  # 在稀疏奖励和网络失败混入负样本时很容易放大噪声。
+  ALGORITHM: ${env:ALGORITHM,grpo}  ## "grpo" | "grpo+slic" | "grpo+abpo" | "grpo+simpo" | "grpo+hspo"
+  ADV_ESTIMATOR: ${env:ADV_ESTIMATOR,grpo}  ## grpo | gigpo | graphgpo
+  STALE_ITERATION: ${env:STALE_ITERATION,0}
+  # 即使后续显式重新启用 SLIC，也先限制历史回放规模，避免每步更新整个 4096 buffer。
+  REPLAY_BUFFER_SIZE: ${env:REPLAY_BUFFER_SIZE,128}
+  REPLAY_COLLECTION: ${env:REPLAY_COLLECTION,uid-turn}   ## uid-turn | cross | turn  == uid-turn(fast), cross(slow), turn(medium)
+  TRAIN_DATA_PATH: ${env:TRAIN_DATA_PATH,train/webwalker_train.parquet}
+  TEST_DATA_PATH: ${env:TEST_DATA_PATH,val/webwalker_val.parquet}
+  SCORE_MODEL_NAME: "Qwen3-30B-A3B-Instruct-2507"
+  SCORE_MODEL_URL: "http://127.0.0.1:19998/v1"
+  OPENAI_API_KEY: "YOUR_ONENAI_API"
+  CUDA_VISIBLE_DEVICES: '0,1,2,3,4,5,6,7'
+  ASCEND_RT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+  HYDRA_FULL_ERROR: 1
+  MAX_PROMPT_LENGTH: ${env:MAX_PROMPT_LENGTH,10240}
+  MAX_RESPONSE_LENGTH: ${env:MAX_RESPONSE_LENGTH,512}
+  # 8 prompts * 8 rollouts = 64 rollouts/step，与旧配置 32 * 2 的生成负载一致，
+  # 但二值奖励下有组内区分度的概率从约 30% 提升到约 80%。
+  N_ROLLOUT: ${env:N_ROLLOUT,8}
+  TRAIN_BATCH_SIZE: ${env:TRAIN_BATCH_SIZE,8}
+  MINI_BATCH_SIZE: ${env:MINI_BATCH_SIZE,8}
+  MICRO_BATCH_SIZE_PER_GPU: ${env:MICRO_BATCH_SIZE_PER_GPU,1}
+  N_GPUS: ${env:N_GPUS,8}
+  NNODES: ${env:NNODES,1}              # 新增：与MA_NUM_HOSTS保持一致，主脚本会export覆盖
+  BASE_MODEL: 'Qwen3-4B-Instruct-2507'
+  ROLLOUT_TP_SIZE: 1
+  EXPERIMENT_NAME: 'AgentFlow_grpo_stable'
+  PROJECT_NAME: 'AgentFlow_pro'
+  BASE_DATA_DIR: 'data'
+  VERBOSITY: 'DEBUG'
+  # 先降低代理并发，代理认证和限流稳定后可通过环境变量逐步恢复到 12/16。
+  N_WORKERS: ${env:N_WORKERS,8}
+  # batch 32->8 后，5 epochs 与旧配置 20 epochs 的总 step/rollout 预算相同。
+  TOTAL_EPOCH: ${env:TOTAL_EPOCH,5}
+  # 默认按 epoch 跑完整预算；首轮可临时 export TOTAL_TRAINING_STEPS=8 做短跑验收。
+  TOTAL_TRAINING_STEPS: ${env:TOTAL_TRAINING_STEPS,null}
+  # Brave 已完成 Gateway 接入，但 Yibu 当前返回 503（无可用 brave-web-search
+  # channel）。上游恢复前默认禁用，避免把基础设施失败写进训练 reward。
+  ENABLE_TOOLS: ["Base_Generator_Tool", "Python_Coder_Tool", "Wikipedia_Search_Tool", "Web_Search_Tool"]
+  TOOL_ENGINE: ["vllm-Qwen3-30B-A3B-Instruct-2507","vllm-Qwen3-30B-A3B-Instruct-2507", "vllm-Qwen3-30B-A3B-Instruct-2507", "vllm-Qwen3-30B-A3B-Instruct-2507"]
+  MODEL_ENGINE: ["trainable", "vllm-Qwen3-30B-A3B-Instruct-2507","vllm-Qwen3-30B-A3B-Instruct-2507","vllm-Qwen3-30B-A3B-Instruct-2507"]
+  # 限制工具历史增长；data.max_prompt_length 无法阻止 rollout 期间的 32k 上下文溢出。
+  TOOL_STEPS: ${env:TOOL_STEPS,4}
+  # 注意：当前 agentflow/engine/vllm.py 的文本路径硬编码为 0.7；此值需修代码后才会生效。
+  TEST_TEMPERATURE: 0.0
+  TRAIN_TEMPERATURE: 0.7
+  OUTPUT_TYPE: "final"    # base, final, direct
+  # 这是整条 agent 轨迹时限；Gateway HTTP timeout 由仓库外 env 文件控制。
+  AGENT_MAX_TIMEOUT: ${env:AGENT_MAX_TIMEOUT,480}
+  KL_LOSS_COEF: ${env:KL_LOSS_COEF,0.01}
+  ENTROPY_COEFF: ${env:ENTROPY_COEFF,0.0005}
+  CHECKPOINT_DIR: ${env:CHECKPOINT_DIR,/home/ma-user/modelarts/log/checkpoints/AgentFlow_grpo_stable}
+
+python_args:
+  agentflow.port: 8088
+  algorithm.adv_estimator: '${ADV_ESTIMATOR}'
+  algorithm.norm_adv_by_std_in_grpo: True
+  data.train_files: '${BASE_DATA_DIR}/${TRAIN_DATA_PATH}'
+  data.val_files: '${BASE_DATA_DIR}/${TEST_DATA_PATH}'
+  actor_rollout_ref.rollout.tensor_model_parallel_size: '${ROLLOUT_TP_SIZE}'
+  trainer.n_gpus_per_node: '${N_GPUS}'
+  trainer.nnodes: '${NNODES}'    # 修改：使用环境变量，与ModelArts实例数同步
+  data.train_batch_size: '${TRAIN_BATCH_SIZE}'
+  +data.stale_iteration: '${STALE_ITERATION}'
+  +data.task: '${TASK}'
+  +data.algorithm: '${ALGORITHM}'
+  +data.replay_buffer_size: '${REPLAY_BUFFER_SIZE}'
+  +data.replay_collection: '${REPLAY_COLLECTION}'
+  actor_rollout_ref.rollout.enable_prefix_caching: False
+  actor_rollout_ref.rollout.n: '${N_ROLLOUT}'
+  # 实际文本 rollout 当前固定使用 0.7；显式对齐 old/ref log-prob 的温度，避免 off-policy 偏差。
+  actor_rollout_ref.rollout.temperature: '${TRAIN_TEMPERATURE}'
+  actor_rollout_ref.rollout.pipeline_model_parallel_size: 1
+  actor_rollout_ref.actor.ulysses_sequence_parallel_size: 2
+  actor_rollout_ref.actor.ppo_max_token_len_per_gpu: 12288
+  actor_rollout_ref.actor.ppo_mini_batch_size: '${MINI_BATCH_SIZE}'
+  actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu: '${MICRO_BATCH_SIZE_PER_GPU}'
+  actor_rollout_ref.actor.ppo_epochs: 1
+  actor_rollout_ref.actor.loss_agg_mode: 'seq-mean-token-sum-norm'
+  actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu: '${MICRO_BATCH_SIZE_PER_GPU}'
+  actor_rollout_ref.rollout.multi_turn.format: 'hermes'
+  actor_rollout_ref.rollout.agent.num_workers: 1
+  actor_rollout_ref.model.path: '${BASE_MODEL}'
+  data.trust_remote_code: True
+  data.dataloader_num_workers: 4
+  data.max_prompt_length: '${MAX_PROMPT_LENGTH}'
+  data.max_response_length: '${MAX_RESPONSE_LENGTH}'
+  data.truncation: 'truncate'    # 'truncate' | 'error'
+  trainer.val_before_train: True
+  trainer.balance_batch: True
+  actor_rollout_ref.actor.optim.lr: 1e-6
+  actor_rollout_ref.actor.use_kl_loss: True
+  actor_rollout_ref.actor.use_dynamic_bsz: False
+  actor_rollout_ref.actor.entropy_checkpointing: True
+  actor_rollout_ref.ref.log_prob_use_dynamic_bsz: False
+  actor_rollout_ref.rollout.log_prob_use_dynamic_bsz: False
+  actor_rollout_ref.rollout.max_num_seqs: 8
+  actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu: 16384
+  actor_rollout_ref.rollout.max_num_batched_tokens: 16384
+  actor_rollout_ref.actor.kl_loss_coef: '${KL_LOSS_COEF}'
+  actor_rollout_ref.actor.entropy_coeff: '${ENTROPY_COEFF}'
+  actor_rollout_ref.actor.clip_ratio_low: 0.2
+  actor_rollout_ref.actor.clip_ratio_high: 0.2
+  actor_rollout_ref.actor.grad_clip: 0.5
+  +actor_rollout_ref.actor.use_m2po_loss: False
+  +actor_rollout_ref.actor.M2_budget: 0.001
+  actor_rollout_ref.model.enable_gradient_checkpointing: True
+  actor_rollout_ref.actor.fsdp_config.use_torch_compile: False
+  actor_rollout_ref.model.use_remove_padding: True
+  actor_rollout_ref.model.enable_activation_offload: False
+  actor_rollout_ref.actor.fsdp_config.param_offload: False
+  actor_rollout_ref.actor.fsdp_config.optimizer_offload: False
+  actor_rollout_ref.rollout.name: 'vllm'
+  actor_rollout_ref.rollout.gpu_memory_utilization: 0.6
+  actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu: '${MICRO_BATCH_SIZE_PER_GPU}'
+  actor_rollout_ref.ref.fsdp_config.param_offload: False
+  algorithm.use_kl_in_reward: False
+  trainer.critic_warmup: 0
+  trainer.logger: ['console']
+  trainer.project_name: '${PROJECT_NAME}'
+  trainer.experiment_name: '${EXPERIMENT_NAME}'
+  trainer.default_local_dir: '${CHECKPOINT_DIR}'
+  trainer.resume_mode: 'auto'
+  trainer.max_actor_ckpt_to_keep: 3
+  trainer.max_critic_ckpt_to_keep: 3
+  trainer.save_freq: 4
+  trainer.test_freq: 4
+  trainer.total_epochs: '${TOTAL_EPOCH}'
+  trainer.total_training_steps: '${TOTAL_TRAINING_STEPS}'
+  trainer.device: "npu"
